@@ -1,0 +1,96 @@
+import os
+import time
+import json
+import platform
+import subprocess
+import hashlib
+
+# CONFIG
+CHECK_INTERVAL = 900  # 15 minutes
+STATUS_FILE = "last_status.json"
+
+# UTILITY FUNCTIONS
+
+def get_disk_encryption_status():
+    if platform.system() == "Windows":
+        output = subprocess.getoutput('manage-bde -status C:')
+        return "Enabled" if "Percentage Encrypted: 100%" in output else "Disabled"
+    elif platform.system() == "Linux":
+        return "Enabled" if os.path.exists("/dev/mapper/") else "Disabled"
+    elif platform.system() == "Darwin":
+        output = subprocess.getoutput('fdesetup status')
+        return "Enabled" if "FileVault is On" in output else "Disabled"
+    return "Unknown"
+
+def get_os_update_status():
+    if platform.system() == "Windows":
+        return "Up to date"  # Simplified; real check would need Windows Update API
+    elif platform.system() == "Linux":
+        output = subprocess.getoutput('apt list --upgradable')
+        return "Up to date" if "upgradable" not in output else "Pending Updates"
+    elif platform.system() == "Darwin":
+        output = subprocess.getoutput('softwareupdate -l')
+        return "Up to date" if "No new software" in output else "Pending Updates"
+    return "Unknown"
+
+def get_antivirus_status():
+    if platform.system() == "Windows":
+        output = subprocess.getoutput("powershell Get-MpComputerStatus | findstr AMServiceEnabled")
+        return "Running" if "True" in output else "Not Running"
+    elif platform.system() == "Linux":
+        output = subprocess.getoutput("systemctl is-active clamav-daemon")
+        return "Running" if "active" in output else "Not Running"
+    elif platform.system() == "Darwin":
+        return "Not Checked"  # Needs specific AV installed
+    return "Unknown"
+
+def get_sleep_setting():
+    if platform.system() == "Windows":
+        output = subprocess.getoutput('powercfg -query SCHEME_CURRENT SUB_SLEEP')
+        return "Enabled" if "10" in output else "Disabled"
+    elif platform.system() == "Linux":
+        return "Enabled" if os.path.exists("/etc/systemd/sleep.conf") else "Unknown"
+    elif platform.system() == "Darwin":
+        output = subprocess.getoutput("pmset -g")
+        return "Enabled" if "sleep" in output else "Unknown"
+    return "Unknown"
+
+def get_status():
+    return {
+        "disk_encryption": get_disk_encryption_status(),
+        "os_update": get_os_update_status(),
+        "antivirus": get_antivirus_status(),
+        "inactivity_sleep": get_sleep_setting()
+    }
+
+def hash_status(status):
+    return hashlib.md5(json.dumps(status, sort_keys=True).encode()).hexdigest()
+
+def has_status_changed(new_status):
+    if os.path.exists(STATUS_FILE):
+        with open(STATUS_FILE, "r") as f:
+            old_status = json.load(f)
+        return hash_status(old_status) != hash_status(new_status)
+    return True
+
+def save_status(status):
+    with open(STATUS_FILE, "w") as f:
+        json.dump(status, f, indent=2)
+
+# MAIN DAEMON LOOP
+def daemon():
+    print("Starting system utility daemon...")
+    while True:
+        status = get_status()
+        if has_status_changed(status):
+            print("Change detected, updating status...")
+            print(json.dumps(status, indent=2))
+            save_status(status)
+            # Optionally: send to API
+            # requests.post('https://your.api/endpoint', json=status)
+        else:
+            print("No changes in system state.")
+        time.sleep(CHECK_INTERVAL)
+
+if __name__ == "__main__":
+    daemon()
